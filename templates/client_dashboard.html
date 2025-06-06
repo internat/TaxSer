@@ -1,0 +1,387 @@
+{% extends "base.html" %}
+
+{% block title %}Панель клиента - TaxiService{% endblock %}
+
+{% block content %}
+<div class="dashboard-container">
+    <div class="dashboard-header">
+        <h1>Найти такси</h1>
+        <div class="search-controls">
+            <button id="findTaxisBtn" class="btn btn-primary">
+                <i class="fas fa-search"></i> Найти ближайшие такси
+            </button>
+            <div class="radius-control">
+                <label for="searchRadius">Радиус поиска:</label>
+                <select id="searchRadius">
+                    <option value="5">5 км</option>
+                    <option value="10" selected>10 км</option>
+                    <option value="20">20 км</option>
+                    <option value="50">50 км</option>
+                </select>
+            </div>
+        </div>
+        <div class="manual-location-search" style="margin-top: 1rem; padding: 1rem; background: #f8f9fa; border-radius: 5px;">
+            <p><strong>Или укажите местоположение вручную:</strong></p>
+            <div style="display: flex; gap: 1rem; align-items: end; flex-wrap: wrap;">
+                <div>
+                    <label for="searchLat">Широта:</label>
+                    <input type="number" id="searchLat" step="0.000001" placeholder="55.7558" style="width: 120px;">
+                </div>
+                <div>
+                    <label for="searchLon">Долгота:</label>
+                    <input type="number" id="searchLon" step="0.000001" placeholder="37.6176" style="width: 120px;">
+                </div>
+                <button id="searchManualBtn" class="btn btn-secondary">Поиск по координатам</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="dashboard-content">
+        <div class="map-section">
+            <div id="map" class="map-container"></div>
+        </div>
+
+        <div class="taxis-section">
+            <h2>Доступные такси</h2>
+            <div id="taxisList" class="taxis-list">
+                <p class="no-taxis">Нажмите "Найти ближайшие такси" для поиска</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal for taxi details -->
+<div id="taxiModal" class="modal">
+    <div class="modal-content">
+        <span class="close">&times;</span>
+        <div id="taxiDetails"></div>
+    </div>
+</div>
+
+<!-- Modal for receipt -->
+<div id="receiptModal" class="modal">
+    <div class="modal-content">
+        <span class="close">&times;</span>
+        <div id="receiptDetails"></div>
+    </div>
+</div>
+
+<!-- Modal for reviews -->
+<div id="reviewModal" class="modal">
+    <div class="modal-content">
+        <span class="close">&times;</span>
+        <div id="reviewContent"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let map;
+let currentLocation = null;
+let taxiMarkers = [];
+
+function initMap() {
+    map = L.map('map').setView([55.7558, 37.6176], 10); // Moscow center
+    
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+}
+
+function getCurrentLocation() {
+    return new Promise((resolve, reject) => {
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(resolve, reject);
+        } else {
+            reject(new Error('Геолокация не поддерживается'));
+        }
+    });
+}
+
+async function findNearbyTaxis() {
+    try {
+        const position = await getCurrentLocation();
+        currentLocation = {
+            lat: position.coords.latitude,
+            lon: position.coords.longitude
+        };
+        
+        await searchTaxis();
+    } catch (error) {
+        showNotification('Не удалось получить местоположение. Используйте ручной ввод координат.', 'error');
+    }
+}
+
+async function searchTaxis() {
+    if (!currentLocation) {
+        showNotification('Местоположение не определено', 'error');
+        return;
+    }
+    
+    // Update map center
+    map.setView([currentLocation.lat, currentLocation.lon], 13);
+    
+    // Add user location marker
+    if (window.userMarker) {
+        map.removeLayer(window.userMarker);
+    }
+    window.userMarker = L.marker([currentLocation.lat, currentLocation.lon])
+        .addTo(map)
+        .bindPopup('Ваше местоположение')
+        .openPopup();
+    
+    const radius = document.getElementById('searchRadius').value;
+    const response = await fetch(`/api/get_nearby_taxis?lat=${currentLocation.lat}&lon=${currentLocation.lon}&radius=${radius}`);
+    const result = await response.json();
+    
+    if (result.success) {
+        displayTaxis(result.taxis);
+    } else {
+        showNotification(result.message, 'error');
+    }
+}
+
+async function searchByManualLocation() {
+    const lat = parseFloat(document.getElementById('searchLat').value);
+    const lon = parseFloat(document.getElementById('searchLon').value);
+    
+    if (isNaN(lat) || isNaN(lon)) {
+        showNotification('Введите корректные координаты', 'error');
+        return;
+    }
+    
+    if (lat < -90 || lat > 90) {
+        showNotification('Широта должна быть от -90 до 90', 'error');
+        return;
+    }
+    
+    if (lon < -180 || lon > 180) {
+        showNotification('Долгота должна быть от -180 до 180', 'error');
+        return;
+    }
+    
+    currentLocation = { lat, lon };
+    await searchTaxis();
+}
+
+function displayTaxis(taxis) {
+    // Clear existing markers
+    taxiMarkers.forEach(marker => map.removeLayer(marker));
+    taxiMarkers = [];
+    
+    const taxisList = document.getElementById('taxisList');
+    
+    if (taxis.length === 0) {
+        taxisList.innerHTML = '<p class="no-taxis">Такси не найдены в указанном радиусе</p>';
+        return;
+    }
+    
+    taxisList.innerHTML = '';
+    
+    taxis.forEach(taxi => {
+        // Add marker to map
+        const marker = L.marker([taxi.latitude, taxi.longitude])
+            .addTo(map)
+            .bindPopup(`
+                <strong>${taxi.driver_name}</strong><br>
+                ${taxi.car_model || 'Модель не указана'}<br>
+                ${taxi.price_per_km} руб/км<br>
+                Расстояние: ${taxi.distance} км
+            `);
+        taxiMarkers.push(marker);
+        
+        // Add to list
+        const taxiCard = document.createElement('div');
+        taxiCard.className = 'taxi-card';
+        taxiCard.innerHTML = `
+            <div class="taxi-info">
+                <h3>${taxi.driver_name}</h3>
+                <p><strong>Модель:</strong> ${taxi.car_model || 'Не указана'}</p>
+                <p><strong>Цена:</strong> ${taxi.price_per_km} руб/км</p>
+                <p><strong>Расстояние:</strong> ${taxi.distance} км</p>
+                <p><strong>Просмотров:</strong> ${taxi.views_count}</p>
+                ${taxi.description ? `<p><strong>Описание:</strong> ${taxi.description}</p>` : ''}
+            </div>
+            <div class="taxi-actions">
+                <button class="btn btn-primary" onclick="viewTaxiDetails(${taxi.id})">Подробнее</button>
+                <button class="btn btn-success" onclick="bookTaxi(${taxi.id})">Заказать</button>
+            </div>
+        `;
+        taxisList.appendChild(taxiCard);
+    });
+}
+
+async function viewTaxiDetails(taxiId) {
+    try {
+        const response = await fetch(`/api/view_listing/${taxiId}`);
+        const result = await response.json();
+        
+        if (result.success) {
+            const listing = result.listing;
+            const reviews = result.reviews;
+            
+            let reviewsHtml = '<h3>Отзывы</h3>';
+            if (reviews.length === 0) {
+                reviewsHtml += '<p>Отзывов пока нет</p>';
+            } else {
+                reviews.forEach(review => {
+                    reviewsHtml += `
+                        <div class="review">
+                            <div class="review-header">
+                                <strong>${review.username}</strong>
+                                <div class="rating">${'★'.repeat(review.rating)}${'☆'.repeat(5-review.rating)}</div>
+                            </div>
+                            <p>${review.comment || 'Без комментария'}</p>
+                            <small>${new Date(review.created_at).toLocaleDateString()}</small>
+                        </div>
+                    `;
+                });
+            }
+            
+            document.getElementById('taxiDetails').innerHTML = `
+                <h2>Детали такси</h2>
+                <div class="taxi-details">
+                    <p><strong>Водитель:</strong> ${listing.driver_name}</p>
+                    <p><strong>Модель:</strong> ${listing.car_model || 'Не указана'}</p>
+                    <p><strong>Цена за км:</strong> ${listing.price_per_km} руб.</p>
+                    <p><strong>Описание:</strong> ${listing.description || 'Нет описания'}</p>
+                    <p><strong>Просмотров:</strong> ${listing.views_count}</p>
+                </div>
+                
+                <div class="contact-section">
+                    <h3>Связь</h3>
+                    ${listing.whatsapp ? 
+                        `<a href="https://wa.me/${listing.whatsapp.replace(/[^0-9]/g, '')}" target="_blank" class="btn btn-whatsapp">
+                            <i class="fab fa-whatsapp"></i> Написать в WhatsApp
+                        </a>` : 
+                        '<p>WhatsApp не указан</p>'
+                    }
+                </div>
+                
+                ${reviewsHtml}
+                
+                <div class="add-review-section">
+                    <h3>Оставить отзыв</h3>
+                    <form id="reviewForm">
+                        <input type="hidden" name="listing_id" value="${taxiId}">
+                        <div class="form-group">
+                            <label>Рейтинг:</label>
+                            <div class="rating-input">
+                                <input type="radio" name="rating" value="5" id="star5"><label for="star5">★</label>
+                                <input type="radio" name="rating" value="4" id="star4"><label for="star4">★</label>
+                                <input type="radio" name="rating" value="3" id="star3"><label for="star3">★</label>
+                                <input type="radio" name="rating" value="2" id="star2"><label for="star2">★</label>
+                                <input type="radio" name="rating" value="1" id="star1"><label for="star1">★</label>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="comment">Комментарий:</label>
+                            <textarea name="comment" id="comment" rows="3"></textarea>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Отправить отзыв</button>
+                    </form>
+                </div>
+            `;
+            
+            document.getElementById('taxiModal').style.display = 'block';
+            
+            // Add review form handler
+            document.getElementById('reviewForm').addEventListener('submit', async function(e) {
+                e.preventDefault();
+                await submitReview(this);
+            });
+        }
+    } catch (error) {
+        showNotification('Ошибка загрузки деталей', 'error');
+    }
+}
+
+async function bookTaxi(taxiId) {
+    try {
+        const response = await fetch('/api/book_taxi', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ listing_id: taxiId })
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            const receipt = result.receipt;
+            document.getElementById('receiptDetails').innerHTML = `
+                <h2>Чек на поездку</h2>
+                <div class="receipt">
+                    <p><strong>Номер заказа:</strong> #${receipt.booking_id}</p>
+                    <p><strong>Автомобиль:</strong> ${receipt.car_model || 'Не указан'}</p>
+                    <p><strong>Цена за км:</strong> ${receipt.price_per_km} руб.</p>
+                    <p><strong>Описание:</strong> ${receipt.description || 'Нет описания'}</p>
+                    <p><strong>Дата заказа:</strong> ${new Date().toLocaleString()}</p>
+                </div>
+                <p class="receipt-note">Сохраните этот чек для ваших записей</p>
+                <button onclick="window.print()" class="btn btn-secondary">Печать</button>
+            `;
+            document.getElementById('receiptModal').style.display = 'block';
+            showNotification('Такси успешно заказано!', 'success');
+        } else {
+            showNotification(result.message, 'error');
+        }
+    } catch (error) {
+        showNotification('Ошибка при заказе такси', 'error');
+    }
+}
+
+async function submitReview(form) {
+    const formData = new FormData(form);
+    const data = Object.fromEntries(formData);
+    
+    if (!data.rating) {
+        showNotification('Выберите рейтинг', 'error');
+        return;
+    }
+    
+    try {
+        const response = await fetch('/api/add_review', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(data)
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            showNotification('Отзыв добавлен!', 'success');
+            document.getElementById('taxiModal').style.display = 'none';
+        } else {
+            showNotification(result.message, 'error');
+        }
+    } catch (error) {
+        showNotification('Ошибка при добавлении отзыва', 'error');
+    }
+}
+
+// Event listeners
+document.getElementById('findTaxisBtn').addEventListener('click', findNearbyTaxis);
+document.getElementById('searchManualBtn').addEventListener('click', searchByManualLocation);
+
+// Modal close handlers
+document.querySelectorAll('.modal .close').forEach(closeBtn => {
+    closeBtn.addEventListener('click', function() {
+        this.closest('.modal').style.display = 'none';
+    });
+});
+
+window.addEventListener('click', function(event) {
+    if (event.target.classList.contains('modal')) {
+        event.target.style.display = 'none';
+    }
+});
+
+// Initialize map on page load
+initMap();
+</script>
+{% endblock %}

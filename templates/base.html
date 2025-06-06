@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}TaxiService{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-logo">
+                <i class="fas fa-taxi"></i>
+                <span>TaxiService</span>
+            </div>
+            <div class="nav-menu">
+                {% if session.user_id %}
+                    <span class="nav-user">Привет, {{ session.username }}!</span>
+                    <a href="{{ url_for('dashboard') }}" class="nav-link">Панель</a>
+                    <a href="{{ url_for('logout') }}" class="nav-link">Выйти</a>
+                {% else %}
+                    <a href="{{ url_for('login') }}" class="nav-link">Войти</a>
+                    <a href="{{ url_for('register') }}" class="nav-link">Регистрация</a>
+                {% endif %}
+            </div>
+        </div>
+    </nav>
+
+    <main class="main-content">
+        {% block content %}{% endblock %}
+    </main>
+
+    <div id="notification" class="notification"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

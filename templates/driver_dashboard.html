@@ -1,0 +1,278 @@
+{% extends "base.html" %}
+
+{% block title %}Панель водителя - TaxiService{% endblock %}
+
+{% block content %}
+<div class="dashboard-container">
+    <div class="dashboard-header">
+        <h1>Панель водителя</h1>
+        <div class="stats-cards">
+            <div class="stat-card">
+                <i class="fas fa-eye"></i>
+                <div class="stat-info">
+                    <span class="stat-number" id="totalViews">0</span>
+                    <span class="stat-label">Всего просмотров</span>
+                </div>
+            </div>
+            <div class="stat-card">
+                <i class="fas fa-car"></i>
+                <div class="stat-info">
+                    <span class="stat-number" id="totalBookings">0</span>
+                    <span class="stat-label">Всего заказов</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="dashboard-content">
+        <div class="listing-section">
+            <h2>Управление объявлением</h2>
+            
+            <div id="noActiveListing" class="no-listing">
+                <p>У вас нет активного объявления</p>
+                <button id="createListingBtn" class="btn btn-primary">Создать объявление</button>
+            </div>
+            
+            <div id="activeListing" class="active-listing" style="display: none;">
+                <div class="listing-info">
+                    <h3>Активное объявление</h3>
+                    <div id="listingDetails"></div>
+                    <button id="endListingBtn" class="btn btn-danger">Завершить объявление</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="createListingForm" class="listing-form" style="display: none;">
+            <h3>Создать новое объявление</h3>
+            <form id="listingForm">
+                <div class="form-group">
+                    <label for="carModel">Модель автомобиля:</label>
+                    <input type="text" id="carModel" name="car_model" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="pricePerKm">Цена за км (руб.):</label>
+                    <input type="number" id="pricePerKm" name="price_per_km" step="0.01" min="0" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="description">Описание:</label>
+                    <textarea id="description" name="description" rows="3" placeholder="Дополнительная информация о поездке"></textarea>
+                </div>
+                
+                <div class="form-group">
+                    <label>Ваше местоположение:</label>
+                    <button type="button" id="getLocationBtn" class="btn btn-secondary">
+                        <i class="fas fa-map-marker-alt"></i> Получить текущее местоположение
+                    </button>
+                    <div class="manual-location" style="margin-top: 1rem;">
+                        <p>Или введите координаты вручную:</p>
+                        <div style="display: flex; gap: 1rem;">
+                            <div>
+                                <label for="manualLat">Широта:</label>
+                                <input type="number" id="manualLat" step="0.000001" placeholder="55.7558">
+                            </div>
+                            <div>
+                                <label for="manualLon">Долгота:</label>
+                                <input type="number" id="manualLon" step="0.000001" placeholder="37.6176">
+                            </div>
+                            <button type="button" id="useManualLocationBtn" class="btn btn-secondary">Использовать</button>
+                        </div>
+                    </div>
+                    <div id="locationInfo" class="location-info"></div>
+                </div>
+                
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary">Создать объявление</button>
+                    <button type="button" id="cancelCreateBtn" class="btn btn-secondary">Отмена</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentLocation = null;
+
+async function loadDriverStats() {
+    try {
+        const response = await fetch('/api/driver_stats');
+        const result = await response.json();
+        
+        if (result.success) {
+            document.getElementById('totalViews').textContent = result.total_views;
+            document.getElementById('totalBookings').textContent = result.total_bookings;
+            
+            if (result.has_active_listing) {
+                document.getElementById('noActiveListing').style.display = 'none';
+                document.getElementById('activeListing').style.display = 'block';
+                
+                const listing = result.active_listing;
+                document.getElementById('listingDetails').innerHTML = `
+                    <p><strong>Модель:</strong> ${listing.car_model || 'Не указана'}</p>
+                    <p><strong>Цена за км:</strong> ${listing.price_per_km} руб.</p>
+                    <p><strong>Описание:</strong> ${listing.description || 'Нет описания'}</p>
+                    <p><strong>Просмотров:</strong> ${listing.views_count}</p>
+                `;
+                
+                // Add event listener for end listing button
+                const endBtn = document.getElementById('endListingBtn');
+                if (endBtn) {
+                    endBtn.onclick = async function() {
+                        if (confirm('Вы уверены, что хотите завершить объявление?')) {
+                            try {
+                                const response = await fetch('/api/end_listing', {
+                                    method: 'POST',
+                                    headers: {
+                                        'Content-Type': 'application/json',
+                                    }
+                                });
+                                
+                                const result = await response.json();
+                                
+                                if (result.success) {
+                                    showNotification('Объявление завершено', 'success');
+                                    loadDriverStats();
+                                } else {
+                                    showNotification(result.message, 'error');
+                                }
+                            } catch (error) {
+                                showNotification('Ошибка при завершении объявления', 'error');
+                            }
+                        }
+                    };
+                }
+            } else {
+                document.getElementById('noActiveListing').style.display = 'block';
+                document.getElementById('activeListing').style.display = 'none';
+            }
+        }
+    } catch (error) {
+        showNotification('Ошибка загрузки статистики', 'error');
+    }
+}
+
+document.getElementById('createListingBtn').addEventListener('click', function() {
+    document.getElementById('createListingForm').style.display = 'block';
+    this.style.display = 'none';
+});
+
+document.getElementById('cancelCreateBtn').addEventListener('click', function() {
+    document.getElementById('createListingForm').style.display = 'none';
+    document.getElementById('createListingBtn').style.display = 'block';
+});
+
+document.getElementById('getLocationBtn').addEventListener('click', function() {
+    if (navigator.geolocation) {
+        this.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Получение местоположения...';
+        this.disabled = true;
+        
+        navigator.geolocation.getCurrentPosition(
+            (position) => {
+                currentLocation = {
+                    latitude: position.coords.latitude,
+                    longitude: position.coords.longitude
+                };
+                
+                document.getElementById('locationInfo').innerHTML = `
+                    <p class="location-success">
+                        <i class="fas fa-check"></i> 
+                        Местоположение получено: ${currentLocation.latitude.toFixed(6)}, ${currentLocation.longitude.toFixed(6)}
+                    </p>
+                `;
+                
+                this.innerHTML = '<i class="fas fa-map-marker-alt"></i> Местоположение получено';
+                this.disabled = false;
+            },
+            (error) => {
+                showNotification('Не удалось получить местоположение. Используйте ручной ввод координат.', 'error');
+                this.innerHTML = '<i class="fas fa-map-marker-alt"></i> Получить текущее местоположение';
+                this.disabled = false;
+            }
+        );
+    } else {
+        showNotification('Геолокация не поддерживается. Используйте ручной ввод координат.', 'error');
+    }
+});
+
+document.getElementById('useManualLocationBtn').addEventListener('click', function() {
+    const lat = parseFloat(document.getElementById('manualLat').value);
+    const lon = parseFloat(document.getElementById('manualLon').value);
+    
+    if (isNaN(lat) || isNaN(lon)) {
+        showNotification('Введите корректные координаты', 'error');
+        return;
+    }
+    
+    if (lat < -90 || lat > 90) {
+        showNotification('Широта должна быть от -90 до 90', 'error');
+        return;
+    }
+    
+    if (lon < -180 || lon > 180) {
+        showNotification('Долгота должна быть от -180 до 180', 'error');
+        return;
+    }
+    
+    currentLocation = {
+        latitude: lat,
+        longitude: lon
+    };
+    
+    document.getElementById('locationInfo').innerHTML = `
+        <p class="location-success">
+            <i class="fas fa-check"></i> 
+            Местоположение установлено: ${currentLocation.latitude.toFixed(6)}, ${currentLocation.longitude.toFixed(6)}
+        </p>
+    `;
+    
+    showNotification('Координаты установлены успешно!', 'success');
+});
+
+document.getElementById('listingForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    
+    if (!currentLocation) {
+        showNotification('Сначала получите ваше местоположение', 'error');
+        return;
+    }
+    
+    const formData = new FormData(this);
+    const data = Object.fromEntries(formData);
+    data.latitude = currentLocation.latitude;
+    data.longitude = currentLocation.longitude;
+    
+    try {
+        const response = await fetch('/api/create_listing', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(data)
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            showNotification('Объявление создано успешно!', 'success');
+            document.getElementById('createListingForm').style.display = 'none';
+            loadDriverStats();
+        } else {
+            showNotification(result.message, 'error');
+        }
+    } catch (error) {
+        showNotification('Ошибка при создании объявления', 'error');
+    }
+});
+
+
+
+// Load stats on page load
+loadDriverStats();
+
+// Refresh stats every 30 seconds
+setInterval(loadDriverStats, 30000);
+</script>
+{% endblock %}
